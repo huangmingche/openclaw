@@ -22,6 +22,7 @@ function createReactionContext(overrides?: {
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom?: string[];
   channelType?: "im" | "channel";
+  channelUsers?: string[];
 }) {
   let addedHandler: SlackReactionHandler | null = null;
   let removedHandler: SlackReactionHandler | null = null;
@@ -38,7 +39,17 @@ function createReactionContext(overrides?: {
   const ctx = {
     app,
     runtime: { error: vi.fn() },
+    dmEnabled: true,
     dmPolicy: overrides?.dmPolicy ?? "open",
+    defaultRequireMention: true,
+    channelsConfig: overrides?.channelUsers
+      ? {
+          C1: {
+            users: overrides.channelUsers,
+            allow: true,
+          },
+        }
+      : undefined,
     groupPolicy: "open",
     allowFrom: overrides?.allowFrom ?? [],
     allowNameMatching: false,
@@ -159,5 +170,24 @@ describe("registerSlackReactionEvents", () => {
     });
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks channel reaction events for users outside channel users allowlist", async () => {
+    enqueueSystemEventMock.mockClear();
+    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+    const { getAddedHandler } = createReactionContext({
+      dmPolicy: "open",
+      channelType: "channel",
+      channelUsers: ["U_OWNER"],
+    });
+    const addedHandler = getAddedHandler();
+    expect(addedHandler).toBeTruthy();
+
+    await addedHandler!({
+      event: makeReactionEvent({ channel: "C1", user: "U_ATTACKER" }),
+      body: {},
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 });
