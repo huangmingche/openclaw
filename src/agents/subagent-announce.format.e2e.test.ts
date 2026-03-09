@@ -998,6 +998,8 @@ describe("subagent announce formatting", () => {
 
     for (const testCase of cases) {
       agentSpy.mockClear();
+      chatHistoryMock.mockReset();
+      readLatestAssistantReplyMock.mockReset();
       sessionStore = {
         "agent:main:subagent:test": {
           sessionId: testCase.childSessionId,
@@ -1033,6 +1035,83 @@ describe("subagent announce formatting", () => {
       expect(msg).toContain(testCase.replyText);
       expect(msg).not.toContain("✅ Subagent");
     }
+  });
+
+  it("does not leak task prompt when subagent errors before producing output (#40845)", async () => {
+    agentSpy.mockClear();
+    chatHistoryMock.mockReset();
+    readLatestAssistantReplyMock.mockReset();
+    sessionStore = {
+      "agent:main:subagent:leak": { sessionId: "child-leak-session" },
+      "agent:main:main": { sessionId: "requester-leak-session" },
+    };
+    // Chat history with only the task prompt — no assistant output.
+    const chatLeakPayload = "LEAKED_CHAT_HISTORY_CONTENT: internal scoring rules and user PII";
+    const nullRolePayload = "LEAKED_NULL_ROLE: sensitive system instructions";
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "user", content: chatLeakPayload }, { content: nullRolePayload }],
+    });
+    readLatestAssistantReplyMock.mockResolvedValue(undefined);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:leak",
+      childRunId: "run-leak-test",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "feishu", to: "user:123", accountId: "acct-1" },
+      task: "summarize findings",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "error", error: "The AI service is temporarily overloaded" },
+      expectsCompletionMessage: true,
+    });
+
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message ?? "";
+    expect(msg).toContain("failed");
+    expect(msg).toContain("overloaded");
+    expect(msg).toContain("(no output)");
+    expect(msg).not.toContain("LEAKED_CHAT_HISTORY_CONTENT");
+    expect(msg).not.toContain("LEAKED_NULL_ROLE");
+  });
+
+  it("preserves tool output in error completion announcements", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-direct-error-tool-output",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-error-tool-output",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "toolResult", content: [{ type: "text", text: "tool output survives" }] }],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-completion-error-tool-output",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      outcome: { status: "error", error: "tool call failed" },
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    const rawMessage = call?.params?.message;
+    const msg = typeof rawMessage === "string" ? rawMessage : "";
+    expect(msg).toContain("failed: tool call failed");
+    expect(msg).toContain("tool output survives");
+    expect(msg).not.toContain("(no output)");
   });
 
   it("routes manual completion announce agent delivery using requester thread hints", async () => {
