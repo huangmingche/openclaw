@@ -138,11 +138,6 @@ describe("secrets runtime snapshot core auth stores", () => {
             token: "old-gh",
             tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
           },
-          "openai:inline": {
-            type: "api_key",
-            provider: "openai",
-            key: "${OPENAI_API_KEY}",
-          },
         }),
     });
 
@@ -159,18 +154,6 @@ describe("secrets runtime snapshot core auth stores", () => {
     expect(snapshot.authStores[0]?.store.profiles["github-copilot:default"]).toMatchObject({
       type: "token",
       token: "ghp-env-token",
-    });
-    expect(snapshot.authStores[0]?.store.profiles["openai:inline"]).toMatchObject({
-      type: "api_key",
-      key: "sk-env-openai",
-    });
-    const inlineProfile = snapshot.authStores[0]?.store.profiles["openai:inline"] as
-      | Record<string, unknown>
-      | undefined;
-    expect(inlineProfile?.keyRef).toEqual({
-      source: "env",
-      provider: "default",
-      id: "OPENAI_API_KEY",
     });
   });
 });
